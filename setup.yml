@@ -56,7 +56,6 @@
       gpgkey: https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
       gpgcheck: yes
   
-  
    - name: install kubelet
      yum:
         name: kubelet
@@ -73,12 +72,62 @@
        name: kubelet
        enabled: yes
        state: started
-  
-- hosts: master
-  become: yes
-  tasks:
+
    - name: install kubectl
      yum:
        name: kubectl
        state: present
        allow_downgrade: true
+
+- hosts: master
+  become: yes
+  tasks:
+    - name: initialize the cluster
+      shell: kubeadm init
+  
+    - name: create .kube directory
+      become: yes
+      become_user: root
+      file:
+        path: $HOME/.kube
+        state: directory
+        mode: 0755
+  
+    - name: copy admin.conf to user's kube config
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: yes
+        owner: root
+    
+    - name: install Pod network
+      become: yes
+      become_user: root
+      shell: kubectl apply -f https://raw.githubusercontent.com/thinkub/ansible-k8s-cluster/master/flannel.yml
+      args:
+        chdir: $HOME
+        creates: pod_network_setup.txt
+
+- hosts: master
+  become: yes
+  gather_facts: false
+  tasks:
+    - name: get join command
+      shell: kubeadm token create --print-join-command
+      register: join_command_raw
+  
+    - name: set join command
+      set_fact:
+        join_command: "{{ join_command_raw.stdout_lines[0] }}"
+  
+  
+- hosts: nodes
+  become: yes
+  tasks:
+    - name: join cluster
+      shell: "{{ hostvars['master'].join_command }} --ignore-preflight-errors all  >> node_joined.txt"
+      args:
+        chdir: $HOME
+        creates: node_joined.txt
+
+
